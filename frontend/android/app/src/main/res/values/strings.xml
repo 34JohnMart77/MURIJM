@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Muri</string>
+    <string name="title_activity_main">Muri</string>
+    <string name="package_name">app.muri.learn</string>
+    <string name="custom_url_scheme">app.muri.learn</string>
+</resources>

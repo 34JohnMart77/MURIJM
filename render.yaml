@@ -1,0 +1,23 @@
+# One-click hosting for Muri on Render (free tier).
+# After deploy you get a public https link for PC + mobile browsers.
+services:
+  - type: web
+    name: muri
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      # SQLite file inside the container (simplest; data resets on redeploy).
+      # For permanent data, attach a disk or switch to hosted MySQL/Postgres.
+      - key: DATABASE_URL
+        value: sqlite:///./muri.db
+      - key: MURI_BASE_URL
+        sync: false # set to your public URL, e.g. https://muri-xxxx.onrender.com
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: MURI_SECRET_KEY
+        generateValue: true
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false

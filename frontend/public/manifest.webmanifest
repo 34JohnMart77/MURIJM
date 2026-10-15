@@ -1,0 +1,29 @@
+{
+  "name": "Muri — Learn. Play. Grow.",
+  "short_name": "Muri",
+  "description": "Muri — an AI-powered learning app. Learn. Play. Grow.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#16171d",
+  "theme_color": "#aa3bff",
+  "icons": [
+    {
+      "src": "/icons/muri-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/muri-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/muri-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
