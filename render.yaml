@@ -4,6 +4,7 @@ services:
   - type: web
     name: muri
     runtime: docker
+    plan: free
     dockerfilePath: ./Dockerfile
     healthCheckPath: /api/health
     envVars:
