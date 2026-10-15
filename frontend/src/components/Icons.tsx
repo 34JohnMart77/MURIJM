@@ -148,6 +148,14 @@ export const CameraIcon = (p: IconProps) => (
   </Icon>
 )
 
+export const MicIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="9" y="3" width="6" height="11" rx="3" />
+    <path d="M5 11a7 7 0 0 0 14 0" />
+    <path d="M12 18v3M8 21h8" />
+  </Icon>
+)
+
 export const FileIcon = (p: IconProps) => (
   <Icon {...p}>
     <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z" />

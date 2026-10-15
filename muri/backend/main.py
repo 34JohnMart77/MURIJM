@@ -399,7 +399,7 @@ async def security_headers(request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "same-origin"
     response.headers["Permissions-Policy"] = (
-        "camera=(), microphone=(), geolocation=(), payment=()"
+        "camera=(), microphone=(self), geolocation=(), payment=()"
     )
     return response
 
@@ -514,7 +514,8 @@ def read_attachments(attachments: List[Attachment]) -> List[dict]:
             continue
         if not payload or len(payload) > MAX_ATTACHMENT_BYTES:
             continue
-        mime = (attachment.mime_type or "application/octet-stream")[:128]
+        mime = (attachment.mime_type or "application/octet-stream")
+        mime = mime.split(";")[0].strip()[:128] or "application/octet-stream"
         name = _safe_filename(attachment.name, mime)
         if mime.startswith("text/") or mime in TEXT_MIME_TYPES:
             try:

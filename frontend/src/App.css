@@ -547,6 +547,21 @@
   white-space: nowrap;
 }
 
+.bubble-audio {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(127, 127, 127, 0.16);
+}
+
+.bubble-audio audio {
+  display: block;
+  height: 36px;
+  max-width: 240px;
+}
+
 .bubble-actions {
   display: flex;
   gap: 2px;
@@ -628,6 +643,10 @@
   color: var(--text);
 }
 
+.attach-audio-icon {
+  color: var(--accent);
+}
+
 .attach-name {
   flex: 1;
   min-width: 0;
@@ -659,6 +678,70 @@
 .attach-error {
   font-size: 13px;
   color: var(--danger);
+}
+
+.mic-btn.recording {
+  color: #fff;
+  background: var(--danger);
+  border-color: var(--danger);
+  animation: mic-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes mic-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.45);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(220, 53, 69, 0);
+  }
+}
+
+.recording-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--danger);
+  border-radius: 10px;
+  background: var(--code-bg);
+  font-size: 13px;
+  color: var(--text-h);
+}
+
+.recording-dot {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--danger);
+  animation: mic-pulse 1.4s ease-in-out infinite;
+}
+
+.recording-time {
+  flex: 1;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.recording-cancel,
+.recording-stop {
+  padding: 6px 12px;
+  font-size: 13px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.recording-cancel {
+  color: var(--text-h);
+  background: transparent;
+  border: 1px solid var(--border);
+}
+
+.recording-stop {
+  color: #fff;
+  background: var(--danger);
+  border: 1px solid var(--danger);
 }
 
 .composer textarea {

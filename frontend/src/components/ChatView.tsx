@@ -11,6 +11,7 @@ import {
   CloseIcon,
   CopyIcon,
   FileIcon,
+  MicIcon,
   NoteIcon,
   RefreshIcon,
   StopIcon,
@@ -28,6 +29,7 @@ interface ChatViewProps {
 
 const MAX_ATTACHMENTS = 6
 const MAX_BYTES = 8 * 1024 * 1024
+const MAX_RECORD_SECONDS = 120
 
 const STARTERS = [
   { label: '📖 Explain a topic', prompt: 'Explain a topic to me: ' },
@@ -50,6 +52,32 @@ function readAsDataUrl(file: File): Promise<string> {
   })
 }
 
+function pickAudioMimeType(): string {
+  if (typeof MediaRecorder === 'undefined') return ''
+  const candidates = [
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/ogg;codecs=opus',
+    'audio/mp4',
+  ]
+  return (
+    candidates.find((type) => MediaRecorder.isTypeSupported(type)) ?? ''
+  )
+}
+
+function audioExtension(mime: string): string {
+  if (mime.includes('ogg')) return 'ogg'
+  if (mime.includes('mp4') || mime.includes('m4a')) return 'm4a'
+  if (mime.includes('wav')) return 'wav'
+  return 'webm'
+}
+
+function formatSeconds(total: number): string {
+  const minutes = Math.floor(total / 60)
+  const seconds = total % 60
+  return `${minutes}:${seconds.toString().padStart(2, '0')}`
+}
+
 export default function ChatView({
   messages,
   busy,
@@ -63,10 +91,17 @@ export default function ChatView({
   const [error, setError] = useState('')
   const [copied, setCopied] = useState<number | null>(null)
   const [saved, setSaved] = useState<number | null>(null)
+  const [recording, setRecording] = useState(false)
+  const [recordSeconds, setRecordSeconds] = useState(0)
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const cameraRef = useRef<HTMLInputElement>(null)
+  const recorderRef = useRef<MediaRecorder | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const chunksRef = useRef<Blob[]>([])
+  const timerRef = useRef<number | null>(null)
+  const cancelledRef = useRef(false)
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -78,6 +113,110 @@ export default function ChatView({
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`
   }, [input])
+
+  // Stop any in-flight recording and release the microphone on unmount.
+  useEffect(() => {
+    return () => {
+      if (timerRef.current !== null) window.clearInterval(timerRef.current)
+      const recorder = recorderRef.current
+      if (recorder && recorder.state !== 'inactive') {
+        cancelledRef.current = true
+        recorder.stop()
+      }
+      streamRef.current?.getTracks().forEach((track) => track.stop())
+    }
+  }, [])
+
+  async function addAudioBlob(blob: Blob, mimeType: string) {
+    if (pending.length >= MAX_ATTACHMENTS) {
+      setError(`Up to ${MAX_ATTACHMENTS} attachments.`)
+      return
+    }
+    if (blob.size > MAX_BYTES) {
+      setError('Voice message is too large.')
+      return
+    }
+    const file = new File([blob], `voice-message.${audioExtension(mimeType)}`, {
+      type: mimeType,
+    })
+    const url = await readAsDataUrl(file)
+    const stamp = new Date().toISOString().slice(11, 19).replace(/:/g, '')
+    setPending((prev) => [
+      ...prev,
+      {
+        id: `voice-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        name: `voice-message-${stamp}.${audioExtension(mimeType)}`,
+        mime_type: mimeType,
+        data: url,
+        url,
+        kind: 'audio',
+        size: blob.size,
+      },
+    ])
+  }
+
+  async function startRecording() {
+    if (recording || busy) return
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError('Voice recording is not supported in this browser.')
+      return
+    }
+    setError('')
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mimeType = pickAudioMimeType()
+      const recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream)
+      chunksRef.current = []
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) chunksRef.current.push(event.data)
+      }
+      recorder.onstop = () => {
+        stream.getTracks().forEach((track) => track.stop())
+        if (timerRef.current !== null) {
+          window.clearInterval(timerRef.current)
+          timerRef.current = null
+        }
+        setRecording(false)
+        setRecordSeconds(0)
+        recorderRef.current = null
+        streamRef.current = null
+        if (cancelledRef.current) {
+          cancelledRef.current = false
+          return
+        }
+        const type = (recorder.mimeType || mimeType || 'audio/webm').split(';')[0]
+        const blob = new Blob(chunksRef.current, { type })
+        chunksRef.current = []
+        if (blob.size > 0) void addAudioBlob(blob, type)
+      }
+      recorderRef.current = recorder
+      streamRef.current = stream
+      cancelledRef.current = false
+      recorder.start()
+      setRecording(true)
+      setRecordSeconds(0)
+      timerRef.current = window.setInterval(() => {
+        setRecordSeconds((value) => {
+          if (value + 1 >= MAX_RECORD_SECONDS) stopRecording()
+          return value + 1
+        })
+      }, 1000)
+    } catch {
+      setError('Could not access your microphone. Check browser permissions.')
+    }
+  }
+
+  function stopRecording() {
+    const recorder = recorderRef.current
+    if (recorder && recorder.state !== 'inactive') recorder.stop()
+  }
+
+  function cancelRecording() {
+    cancelledRef.current = true
+    stopRecording()
+  }
 
   async function addFiles(files: FileList | null) {
     if (!files || files.length === 0) return
@@ -205,6 +344,11 @@ export default function ChatView({
                         >
                           <img src={att.url} alt={att.name} />
                         </a>
+                      ) : att.kind === 'audio' ? (
+                        <span className="bubble-audio" key={attIndex}>
+                          <MicIcon size={15} />
+                          <audio controls src={att.url} />
+                        </span>
                       ) : (
                         <a
                           key={attIndex}
@@ -288,6 +432,10 @@ export default function ChatView({
               <div key={item.id} className="attach-chip">
                 {item.kind === 'image' ? (
                   <img src={item.url} alt={item.name} />
+                ) : item.kind === 'audio' ? (
+                  <span className="attach-file-icon attach-audio-icon">
+                    <MicIcon size={16} />
+                  </span>
                 ) : (
                   <span className="attach-file-icon">
                     <FileIcon size={16} />
@@ -308,6 +456,29 @@ export default function ChatView({
         )}
 
         {error && <p className="attach-error">{error}</p>}
+
+        {recording && (
+          <div className="recording-bar" role="status">
+            <span className="recording-dot" />
+            <span className="recording-time">
+              Recording… {formatSeconds(recordSeconds)}
+            </span>
+            <button
+              type="button"
+              className="recording-cancel"
+              onClick={cancelRecording}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="recording-stop"
+              onClick={stopRecording}
+            >
+              Stop &amp; attach
+            </button>
+          </div>
+        )}
 
         <div className="composer-row">
           <input
@@ -331,6 +502,7 @@ export default function ChatView({
             className="icon-btn attach-btn"
             title="Attach files"
             aria-label="Attach files"
+            disabled={recording}
             onClick={() => fileRef.current?.click()}
           >
             <AttachIcon />
@@ -340,9 +512,23 @@ export default function ChatView({
             className="icon-btn attach-btn"
             title="Take a photo"
             aria-label="Take a photo"
+            disabled={recording}
             onClick={() => cameraRef.current?.click()}
           >
             <CameraIcon />
+          </button>
+          <button
+            type="button"
+            className={`icon-btn attach-btn mic-btn${
+              recording ? ' recording' : ''
+            }`}
+            title={recording ? 'Stop recording' : 'Record a voice message'}
+            aria-label={recording ? 'Stop recording' : 'Record a voice message'}
+            aria-pressed={recording}
+            disabled={busy}
+            onClick={() => (recording ? stopRecording() : void startRecording())}
+          >
+            <MicIcon />
           </button>
           <textarea
             ref={textareaRef}

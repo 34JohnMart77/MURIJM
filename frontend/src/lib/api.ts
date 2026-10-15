@@ -46,10 +46,12 @@ export interface Attachment {
   data: string
 }
 
+export type AttachmentKind = 'image' | 'file' | 'audio'
+
 export interface MessageAttachment {
   name: string
   url: string
-  kind: 'image' | 'file'
+  kind: AttachmentKind
 }
 
 export interface OutgoingAttachment {
@@ -57,7 +59,7 @@ export interface OutgoingAttachment {
   mime_type: string
   data: string
   url: string
-  kind: 'image' | 'file'
+  kind: AttachmentKind
 }
 
 export interface Message {
