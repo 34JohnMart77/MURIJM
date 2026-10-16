@@ -9,16 +9,10 @@ services:
     healthCheckPath: /api/health
     envVars:
       # SQLite file inside the container (simplest; data resets on redeploy).
-      # For permanent data, attach a disk or switch to hosted MySQL/Postgres.
+      # No external database or credit card needed.
       - key: DATABASE_URL
         value: sqlite:///./muri.db
-      - key: MURI_BASE_URL
-        sync: false # set to your public URL, e.g. https://muri-xxxx.onrender.com
       - key: GEMINI_API_KEY
-        sync: false
+        sync: false # <-- the only value you need to paste in
       - key: MURI_SECRET_KEY
-        generateValue: true
-      - key: GOOGLE_CLIENT_ID
-        sync: false
-      - key: GOOGLE_CLIENT_SECRET
-        sync: false
+        generateValue: true # Render creates this automatically
