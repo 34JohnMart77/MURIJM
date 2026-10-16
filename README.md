@@ -27,7 +27,18 @@ cd frontend; npm ci; npm run dev
 ## Deploy
 
 - Render/Docker: `render.yaml` + `Dockerfile` (set `GEMINI_API_KEY` only).
-- Vercel: `vercel.json` (FastAPI service + Vite frontend).
+- Vercel (Services: FastAPI + Vite, one domain):
+  1. `vercel.json` already declares both services (`app`, `frontend`)
+     with `/api/*` routed to the backend. Import the repo from its root
+     and pick the **Services** framework preset.
+  2. Set env vars on the Vercel project (Production + Preview):
+     `GEMINI_API_KEY`, `MURI_SECRET_KEY` (long random string),
+     `DATABASE_URL` (hosted MySQL, e.g. `mysql+pymysql://user:pass@host:3306/muri?charset=utf8mb4`),
+     `MURI_BASE_URL` (your `https://<project>.vercel.app`),
+     `MURI_COOKIE_SECURE=true`.
+  3. Check `python tests/test_smoke.py` passes before pushing.
+- Note: without a reachable `DATABASE_URL` the API boots but auth/chat
+  return a "database unreachable" message (by design, fail-open boot).
 
 ## Env
 
