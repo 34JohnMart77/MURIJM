@@ -74,6 +74,7 @@ export default function SettingsView({
       <section className="panel">
         <h3>Model</h3>
         <p className="muted">
+          Pick the Gemini model Muri replies with. Custom ids are allowed.
         </p>
         <div className="model-list">
           {modelOptions.map((name) => (

@@ -68,7 +68,7 @@ export default function Dashboard({
         <div>
           <h2>
             {greeting()}
-            {userName ? `, ${userName}` : ''} 👋
+            {userName ? `, ${userName}` : ''}
           </h2>
           <p className="muted">Your Muri activity at a glance.</p>
         </div>

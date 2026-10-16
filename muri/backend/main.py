@@ -363,8 +363,6 @@ def available_models() -> List[str]:
     for name in candidates:
         if not name or name in seen:
             continue
-        if client is None:
-            continue
         seen.append(name)
     return seen
 

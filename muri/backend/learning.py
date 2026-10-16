@@ -740,6 +740,7 @@ def learn_profile(user: User = Depends(require_user)) -> dict:
         notes_count = metrics["notes"]
         today = _today()
         last = stat.last_active_date if stat else None
+        earned = _earned_badges(db, user.id)
     return {
         "onboarded": settings.get("onboarded") == "1",
         "goal": settings.get("goal") or None,
@@ -763,7 +764,7 @@ def learn_profile(user: User = Depends(require_user)) -> dict:
         },
         "certificates": certificates,
         "badges": {
-            "earned": _earned_badges(db, user.id),
+            "earned": earned,
             "catalog": badge_catalog(),
         },
     }
