@@ -73,6 +73,11 @@ class TestBackendModules(unittest.TestCase):
         self.assertIn("GEMINI_API_KEY=", example)
         self.assertIn("your_gemini_api_key_here", example)
 
+    def test_db_supports_hosted_tls(self):
+        source = (BACKEND / "db.py").read_text()
+        self.assertIn("MYSQL_SSL_CA", source)
+        self.assertIn("ssl_ca", source)
+
     def test_real_env_is_not_git_tracked(self):
         try:
             tracked = subprocess.run(

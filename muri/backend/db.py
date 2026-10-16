@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
@@ -12,6 +13,38 @@ DATABASE_URL = os.getenv(
     "mysql+pymysql://root@127.0.0.1:3306/muri?charset=utf8mb4",
 )
 
+# Hosted MySQL (Aiven and most others) requires TLS. Download the provider's
+# CA certificate (Aiven console -> service -> Connection information ->
+# "Download CA certificate"), commit it to the repo (it is public, not a
+# secret), and point MYSQL_SSL_CA at it. Local MySQL without TLS keeps
+# working when this is unset.
+MYSQL_SSL_CA = os.getenv("MYSQL_SSL_CA", "").strip()
+
+
+def _ssl_ca_file() -> str | None:
+    if not MYSQL_SSL_CA:
+        return None
+    here = Path(__file__).resolve().parent
+    candidates = [
+        Path(MYSQL_SSL_CA),
+        here / MYSQL_SSL_CA,
+        here.parents[1] / MYSQL_SSL_CA,  # repo root
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+    print(f"[Muri] MYSQL_SSL_CA not found: {MYSQL_SSL_CA}")
+    return None
+
+
+_SSL_CA = _ssl_ca_file()
+
+
+def _connect_args(url: str) -> dict:
+    if url.startswith("mysql") and _SSL_CA:
+        return {"ssl_ca": _SSL_CA}
+    return {}
+
 
 def _ensure_database(url: str) -> None:
     parsed = make_url(url)
@@ -24,7 +57,7 @@ def _ensure_database(url: str) -> None:
         host=parsed.host,
         port=parsed.port,
     )
-    server_engine = create_engine(server_url, future=True)
+    server_engine = create_engine(server_url, connect_args=_connect_args(url), future=True)
     try:
         with server_engine.connect() as conn:
             conn.execute(
@@ -43,7 +76,9 @@ try:
 except Exception as exc:  # noqa: BLE001 - keep the server bootable without MySQL
     print(f"[Muri] Could not ensure MySQL database exists: {exc}")
 
-engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
+engine = create_engine(
+    DATABASE_URL, pool_pre_ping=True, connect_args=_connect_args(DATABASE_URL), future=True
+)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
