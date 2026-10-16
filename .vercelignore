@@ -1,0 +1,21 @@
+# Keep the Python function bundle small and free of local-only files.
+
+# Local virtualenv / caches must never be uploaded
+muri/backend/venv/
+muri/backend/__pycache__/
+**/__pycache__/
+*.pyc
+.mypy_cache/
+.pytest_cache/
+
+# Built by the frontend service at deploy time
+frontend/node_modules/
+frontend/dist/
+frontend/android/
+frontend/.env.android
+
+# Repo extras not needed at runtime
+.vscode/
+MURI INTRO.mp4
+Muri2026.jpg
+README.md
