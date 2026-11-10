@@ -25,11 +25,35 @@ export interface AuthUser {
   name: string | null
   avatar_url: string | null
   provider: string
+  role: 'user' | 'admin'
 }
 
 export interface Providers {
   google: boolean
   facebook: boolean
+  admin: boolean
+}
+
+export interface AdminUserSummary {
+  id: string
+  name: string | null
+  email: string | null
+  provider: string
+  created_at: string | null
+  last_active: string | null
+  sessions: number
+  prompts: number
+  selected_model: string
+  models_used: { model: string; count: number }[]
+}
+
+export interface AdminOverview {
+  total_users: number
+  total_sessions: number
+  total_prompts: number
+  total_model_calls: number
+  models: { model: string; count: number }[]
+  users: AdminUserSummary[]
 }
 
 export interface PendingLogin {
@@ -102,7 +126,11 @@ export interface AppSettings {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(apiUrl(url), { credentials: 'include', ...init })
+  const res = await fetch(apiUrl(url), {
+    credentials: 'include',
+    ...init,
+    cache: 'no-store',
+  })
   if (!res.ok) {
     const detail = await res.text().catch(() => '')
     throw new Error(detail || `Request failed (${res.status})`)
@@ -186,7 +214,10 @@ export interface ChatStreamOptions extends StreamHandlers {
 }
 
 export async function getMe(): Promise<AuthUser | null> {
-  const res = await fetch(apiUrl('/api/auth/me'), { credentials: 'include' })
+  const res = await fetch(apiUrl('/api/auth/me'), {
+    credentials: 'include',
+    cache: 'no-store',
+  })
   if (res.status === 401) return null
   if (!res.ok) throw new Error(`Failed to check session (${res.status})`)
   const data = (await res.json()) as { user: AuthUser }
@@ -197,9 +228,21 @@ export function getProviders() {
   return request<Providers>('/api/auth/providers')
 }
 
+export function getAdminOverview() {
+  return request<AdminOverview>('/api/admin/overview', { cache: 'no-store' })
+}
+
 export async function login(email: string, password: string) {
   const data = await request<{ user: AuthUser }>(
     '/api/auth/login',
+    json('POST', { email, password }),
+  )
+  return data.user
+}
+
+export async function adminLogin(email: string, password: string) {
+  const data = await request<{ user: AuthUser }>(
+    '/api/auth/admin/login',
     json('POST', { email, password }),
   )
   return data.user
@@ -220,6 +263,7 @@ export async function logout() {
 export async function getPendingLogin(): Promise<PendingLogin | null> {
   const res = await fetch(apiUrl('/api/auth/pending'), {
     credentials: 'include',
+    cache: 'no-store',
   })
   if (!res.ok) return null
   const data = (await res.json()) as { pending: PendingLogin | null }
@@ -475,6 +519,7 @@ export async function streamChat(
     }),
     signal,
     credentials: 'include',
+    cache: 'no-store',
   })
   if (!res.ok || !res.body) {
     throw new Error(`Request failed (${res.status})`)

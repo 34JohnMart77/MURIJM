@@ -7,21 +7,22 @@ import re
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List
+from typing import Callable, List
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(dotenv_path=Path(__file__).with_name(".env"), override=False)
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, inspect, select, text
 
 import auth
 from auth import (
+    ADMIN_EMAIL,
     LOGIN_CODE_MAX_ATTEMPTS,
     OAUTH_STATE_COOKIE,
     PENDING_LOGIN_COOKIE,
@@ -45,6 +46,7 @@ from auth import (
     providers_enabled,
     read_user_settings,
     regenerate_login_code,
+    require_admin,
     require_user,
     send_login_code_email,
     set_pending_cookie,
@@ -56,8 +58,8 @@ from auth import (
     write_user_settings,
 )
 import learning
-from db import Base, SessionLocal, engine
-from models import ChatSession, Message, User
+from db import Base, DATABASE_CONFIG_ERROR, SessionLocal, engine
+from models import ChatSession, Message, ModelUsage, User, UserSetting
 
 from google import genai
 from google.genai import types
@@ -68,10 +70,8 @@ if API_KEY in {"", "your_gemini_api_key_here"}:
 MODEL = os.getenv("MURI_MODEL", "gemini-3.8-flash")
 
 FRONTEND_DIST = Path(
-    os.getenv(
-        "FRONTEND_DIST",
-        Path(__file__).resolve().parents[2] / "frontend" / "dist",
-    )
+    os.getenv("FRONTEND_DIST")
+    or Path(__file__).resolve().parents[2] / "frontend" / "dist"
 )
 
 SYSTEM_INSTRUCTION = (
@@ -235,8 +235,22 @@ def _enforce_chat_budget(db, user_id: str) -> None:
 def _ensure_columns() -> None:
     """Add newer columns to pre-existing tables (create_all won't)."""
     if not engine.dialect.name.startswith("mysql"):
+        tables = set(inspect(engine).get_table_names())
+        if "users" in tables:
+            columns = {column["name"] for column in inspect(engine).get_columns("users")}
+            if "role" not in columns:
+                with engine.begin() as conn:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE users ADD COLUMN role "
+                            "VARCHAR(16) NOT NULL DEFAULT 'user'"
+                        )
+                    )
         return
     wanted = {
+        "users": {
+            "role": "ADD COLUMN `role` VARCHAR(16) NOT NULL DEFAULT 'user'",
+        },
         "sessions": {
             "title": "ADD COLUMN `title` VARCHAR(160) NULL",
             "pinned": "ADD COLUMN `pinned` TINYINT(1) NOT NULL DEFAULT 0",
@@ -272,14 +286,17 @@ def _ensure_columns() -> None:
 
 
 DB_READY = False
-DB_ERROR = ""
-try:
-    Base.metadata.create_all(bind=engine)
-    _ensure_columns()
-    DB_READY = True
-except Exception as exc:  # noqa: BLE001 - keep the server bootable without MySQL
-    DB_ERROR = str(exc)
-    print(f"[Muri] Database unavailable: {exc}")
+DB_ERROR = DATABASE_CONFIG_ERROR
+if DATABASE_CONFIG_ERROR:
+    print(f"[Muri] Database configuration error: {DATABASE_CONFIG_ERROR}")
+else:
+    try:
+        Base.metadata.create_all(bind=engine)
+        _ensure_columns()
+        DB_READY = True
+    except Exception as exc:  # noqa: BLE001 - keep the server bootable without MySQL
+        DB_ERROR = str(exc)
+        print(f"[Muri] Database unavailable: {exc}")
 
 if DB_READY:
     try:
@@ -299,10 +316,18 @@ def provider_ready(provider: str) -> bool:
     return client is not None
 
 
+def _env_location() -> str:
+    """Where configuration lives: the .env file locally, Vercel's dashboard
+    when deployed (the .env file is git-ignored and never reaches Vercel)."""
+    if os.getenv("VERCEL", "").strip():
+        return "the Vercel project's Environment Variables"
+    return "muri/backend/.env"
+
+
 def missing_key_message(provider: str) -> str:
     return (
-        "Muri is not configured yet. Add GEMINI_API_KEY to "
-        "muri/backend/.env and restart the server."
+        f"Muri is not configured yet. Add GEMINI_API_KEY to {_env_location()} "
+        "and redeploy."
     )
 
 
@@ -399,6 +424,9 @@ async def security_headers(request, call_next):
     response.headers["Permissions-Policy"] = (
         "camera=(), microphone=(self), geolocation=(), payment=()"
     )
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
     return response
 
 
@@ -578,10 +606,44 @@ def sse(payload: dict) -> str:
 
 
 def db_unavailable_message() -> str:
-    return (
+    hint = ""
+    if DATABASE_CONFIG_ERROR:
+        hint = f" {DATABASE_CONFIG_ERROR}"
+    elif "'NoneType' object has no attribute 'encoding'" in DB_ERROR:
+        hint = (
+            " The database URL may specify an unsupported MySQL charset. "
+            "Set it to charset=utf8mb4."
+        )
+    elif "Unknown database" in DB_ERROR:
+        hint = (
+            " The database named in the URL does not exist yet -- create it "
+            "in your MySQL provider's console."
+        )
+    elif "Can't connect" in DB_ERROR or "Connection refused" in DB_ERROR:
+        if "127.0.0.1" in DB_ERROR or "localhost" in DB_ERROR:
+            hint = (
+                " The URL points to this machine, but no MySQL server is "
+                "accepting connections. For local development, start the "
+                "Windows MySQL service (for example, MySQL97) and confirm it "
+                "listens on port 3306. For Vercel, use a hosted MySQL URL "
+                "instead of localhost."
+            )
+        else:
+            hint = (
+                " The host or port was refused. Check that the URL points at a "
+                "hosted MySQL reachable from the internet (not localhost) and "
+                "that password special characters are percent-encoded "
+                "(@ -> %40, # -> %23)."
+            )
+    message = (
         "Muri cannot reach the MySQL database. Check DATABASE_URL in "
-        f"muri/backend/.env. Details: {DB_ERROR}"
+        f"{_env_location()}.{hint}"
     )
+    if not DATABASE_CONFIG_ERROR and (
+        "'NoneType' object has no attribute 'encoding'" not in DB_ERROR
+    ):
+        message += " Check the backend logs for connection details."
+    return message
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -630,7 +692,7 @@ def list_session_summaries(db, user_id: str) -> List[dict]:
 # --------------------------------------------------------------------------- #
 @app.get("/api/auth/providers")
 def auth_providers() -> dict:
-    return providers_enabled()
+    return {**providers_enabled(), "admin": bool(ADMIN_EMAIL)}
 
 
 @app.get("/api/auth/me")
@@ -652,6 +714,11 @@ def auth_signup(req: SignupRequest, request: Request, response: Response) -> dic
     _enforce_auth_rate_limit(request, "signup")
     email = normalize_email(req.email)
     validate_credentials(email, req.password)
+    if ADMIN_EMAIL and email == ADMIN_EMAIL:
+        raise HTTPException(
+            status_code=403,
+            detail="The admin account must sign in with its configured Google account.",
+        )
     if not DB_READY:
         raise HTTPException(status_code=503, detail=db_unavailable_message())
     if find_user_by_email(email) is not None:
@@ -673,6 +740,23 @@ def auth_login(req: LoginRequest, request: Request, response: Response) -> dict:
     user = find_user_by_email(req.email)
     if user is None or not verify_password(req.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password.")
+    if user.role == "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Use the administrator sign-in page.",
+        )
+    set_session_cookie(response, user.id)
+    return {"user": user_public(user)}
+
+
+@app.post("/api/auth/admin/login")
+def auth_admin_login(
+    req: LoginRequest, request: Request, response: Response
+) -> dict:
+    _enforce_auth_rate_limit(request, "admin_login")
+    if not DB_READY:
+        raise HTTPException(status_code=503, detail=db_unavailable_message())
+    user = auth.login_admin(req.email, req.password)
     set_session_cookie(response, user.id)
     return {"user": user_public(user)}
 
@@ -684,16 +768,22 @@ def auth_logout(response: Response) -> dict:
 
 
 @app.get("/api/auth/oauth/{provider}/start")
-def oauth_start(provider: str, request: Request) -> RedirectResponse:
+def oauth_start(
+    provider: str, request: Request, mode: str = "user"
+) -> RedirectResponse:
     # GET endpoints redirect (never raise): a raw 429 page would strand users.
     retry = _check_rate_limit(
         f"auth:oauth_start:{_client_ip(request)}", AUTH_RATE_LIMIT, AUTH_RATE_WINDOW
     )
     if retry is not None:
-        return RedirectResponse("/?auth_error=rate_limited")
+        return _oauth_failure("rate_limited", mode)
     enabled = providers_enabled()
     if provider not in {"google", "facebook"} or not enabled.get(provider):
-        return RedirectResponse("/?auth_error=provider_unavailable")
+        return _oauth_failure("provider_unavailable", mode)
+    if mode not in {"user", "admin"}:
+        return _oauth_failure("invalid_state", mode)
+    if mode == "admin" and (provider != "google" or not ADMIN_EMAIL):
+        return _oauth_failure("admin_unavailable", mode)
     state = new_oauth_state()
     url = (
         google_authorize_url(state)
@@ -704,6 +794,15 @@ def oauth_start(provider: str, request: Request) -> RedirectResponse:
     redirect.set_cookie(
         key=OAUTH_STATE_COOKIE,
         value=state,
+        max_age=600,
+        httponly=True,
+        samesite=auth.COOKIE_SAMESITE,
+        secure=auth.COOKIE_SECURE,
+        path="/",
+    )
+    redirect.set_cookie(
+        key=auth.OAUTH_MODE_COOKIE,
+        value=mode,
         max_age=600,
         httponly=True,
         samesite=auth.COOKIE_SAMESITE,
@@ -721,25 +820,27 @@ def oauth_callback(
     state: str = "",
     error: str = "",
 ) -> RedirectResponse:
+    login_mode = request.cookies.get(auth.OAUTH_MODE_COOKIE, "user")
     if error:
-        return RedirectResponse("/?auth_error=access_denied")
+        return _oauth_failure("access_denied", login_mode)
     retry = _check_rate_limit(
         f"auth:oauth_callback:{_client_ip(request)}",
         AUTH_RATE_LIMIT,
         AUTH_RATE_WINDOW,
     )
     if retry is not None:
-        return RedirectResponse("/?auth_error=rate_limited")
+        return _oauth_failure("rate_limited", login_mode)
     expected = request.cookies.get(OAUTH_STATE_COOKIE)
     if provider not in {"google", "facebook"}:
-        return RedirectResponse("/?auth_error=provider_unavailable")
+        return _oauth_failure("provider_unavailable", login_mode)
     if (
         not code
         or not state
         or not expected
         or not hmac.compare_digest(state, expected)
+        or login_mode not in {"user", "admin"}
     ):
-        return RedirectResponse("/?auth_error=invalid_state")
+        return _oauth_failure("invalid_state", login_mode)
     try:
         profile = (
             exchange_google(code)
@@ -747,7 +848,17 @@ def oauth_callback(
             else exchange_facebook(code)
         )
         if not profile.email:
-            return RedirectResponse("/?auth_error=email_required")
+            return _oauth_failure("email_required", login_mode)
+        profile_email = normalize_email(profile.email)
+        if login_mode == "admin" and (
+            provider != "google" or not ADMIN_EMAIL or profile_email != ADMIN_EMAIL
+        ):
+            return _oauth_failure("admin_account_required", login_mode)
+        if ADMIN_EMAIL and profile_email == ADMIN_EMAIL:
+            if provider != "google":
+                return _oauth_failure("admin_google_only", login_mode)
+            if not profile.email_verified:
+                return _oauth_failure("admin_email_unverified", login_mode)
         token, login_code = create_pending_login(
             provider,
             profile.provider_id,
@@ -757,12 +868,27 @@ def oauth_callback(
         )
         send_login_code_email(profile.email, login_code)
     except HTTPException:
-        return RedirectResponse("/?auth_error=login_failed")
+        return _oauth_failure("login_failed", login_mode)
     except Exception:  # noqa: BLE001 - never leak provider errors to the browser
-        return RedirectResponse("/?auth_error=login_failed")
-    redirect = RedirectResponse("/?verify=1")
+        return _oauth_failure("login_failed", login_mode)
+    admin_account = (
+        provider == "google"
+        and bool(ADMIN_EMAIL)
+        and normalize_email(profile.email) == ADMIN_EMAIL
+    )
+    verify_path = "/admin/login" if admin_account else "/"
+    redirect = RedirectResponse(f"{verify_path}?verify=1")
     set_pending_cookie(redirect, token)
     redirect.delete_cookie(OAUTH_STATE_COOKIE, path="/")
+    redirect.delete_cookie(auth.OAUTH_MODE_COOKIE, path="/")
+    return redirect
+
+
+def _oauth_failure(error: str, mode: str = "user") -> RedirectResponse:
+    path = "/admin/login" if mode == "admin" else "/"
+    redirect = RedirectResponse(f"{path}?auth_error={error}")
+    redirect.delete_cookie(OAUTH_STATE_COOKIE, path="/")
+    redirect.delete_cookie(auth.OAUTH_MODE_COOKIE, path="/")
     return redirect
 
 
@@ -863,6 +989,15 @@ def oauth_cancel(request: Request, response: Response) -> dict:
 
 @app.get("/api/health")
 def health() -> dict:
+    reported_db_error = (
+        DB_ERROR
+        if not DB_READY and DATABASE_CONFIG_ERROR
+        else (
+            "Database connection failed. Check backend logs for details."
+            if not DB_READY
+            else ""
+        )
+    )
     return {
         "status": "ok",
         "model": MODEL,
@@ -870,7 +1005,7 @@ def health() -> dict:
         "gemini_configured": client is not None,
         "models": available_models(),
         "db_ready": DB_READY,
-        "db_error": DB_ERROR,
+        "db_error": reported_db_error,
         "providers": providers_enabled(),
         "email_configured": email_enabled(),
     }
@@ -1143,6 +1278,120 @@ def stats(user: User = Depends(require_user)) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# Admin overview (account and model metadata only; no chat contents)
+# --------------------------------------------------------------------------- #
+@app.get("/api/admin/overview")
+def admin_overview(
+    response: Response, _admin: User = Depends(require_admin)
+) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    if not DB_READY:
+        raise HTTPException(status_code=503, detail=db_unavailable_message())
+
+    with SessionLocal() as db:
+        users = db.scalars(
+            select(User)
+            .where(User.role != "admin")
+            .order_by(User.created_at.desc())
+        ).all()
+        user_ids = [item.id for item in users]
+
+        session_counts: dict[str, int] = {}
+        prompt_counts: dict[str, int] = {}
+        last_active: dict[str, datetime] = {}
+        selected_models: dict[str, str] = {}
+        model_counts: dict[str, dict[str, int]] = {}
+        if user_ids:
+            session_counts = {
+                user_id: count
+                for user_id, count in db.execute(
+                    select(ChatSession.user_id, func.count())
+                    .where(ChatSession.user_id.in_(user_ids))
+                    .group_by(ChatSession.user_id)
+                )
+            }
+            prompt_counts = {
+                user_id: count
+                for user_id, count in db.execute(
+                    select(ChatSession.user_id, func.count(Message.id))
+                    .join(Message, Message.session_id == ChatSession.id)
+                    .where(
+                        ChatSession.user_id.in_(user_ids),
+                        Message.role == "user",
+                    )
+                    .group_by(ChatSession.user_id)
+                )
+            }
+            last_active = {
+                user_id: updated_at
+                for user_id, updated_at in db.execute(
+                    select(ChatSession.user_id, func.max(ChatSession.updated_at))
+                    .where(ChatSession.user_id.in_(user_ids))
+                    .group_by(ChatSession.user_id)
+                )
+                if updated_at is not None
+            }
+            selected_models = {
+                setting.user_id: setting.value
+                for setting in db.scalars(
+                    select(UserSetting).where(
+                        UserSetting.user_id.in_(user_ids),
+                        UserSetting.key == "model",
+                    )
+                )
+            }
+            for user_id, model_name, count in db.execute(
+                select(ModelUsage.user_id, ModelUsage.model, func.count())
+                .where(ModelUsage.user_id.in_(user_ids))
+                .group_by(ModelUsage.user_id, ModelUsage.model)
+            ):
+                model_counts.setdefault(user_id, {})[model_name] = count
+
+        users_data = [
+            {
+                "id": account.id,
+                "name": account.name,
+                "email": account.email,
+                "provider": account.provider,
+                "created_at": _iso(account.created_at),
+                "last_active": _iso(last_active.get(account.id)),
+                "sessions": session_counts.get(account.id, 0),
+                "prompts": prompt_counts.get(account.id, 0),
+                "selected_model": selected_models.get(account.id, MODEL),
+                "models_used": [
+                    {"model": model_name, "count": count}
+                    for model_name, count in sorted(
+                        model_counts.get(account.id, {}).items(),
+                        key=lambda item: (-item[1], item[0]),
+                    )
+                ],
+            }
+            for account in users
+        ]
+        global_models: dict[str, int] = {}
+        for model_name, count in db.execute(
+            select(ModelUsage.model, func.count())
+            .where(ModelUsage.user_id.in_(user_ids))
+            .group_by(ModelUsage.model)
+        ):
+            global_models[model_name] = count
+
+    return {
+        "total_users": len(users_data),
+        "total_sessions": sum(session_counts.values()),
+        "total_prompts": sum(prompt_counts.values()),
+        "total_model_calls": sum(global_models.values()),
+        "models": [
+            {"model": model_name, "count": count}
+            for model_name, count in sorted(
+                global_models.items(), key=lambda item: (-item[1], item[0])
+            )
+        ],
+        "users": users_data,
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Chat
 # --------------------------------------------------------------------------- #
 # Provider errors that are worth retrying on a different model: a retired model
@@ -1196,7 +1445,7 @@ def gemini_reply(
     attachments: List[Attachment],
     system: str,
     temperature: float,
-) -> str:
+) -> tuple[str, str]:
     contents = build_contents(history, attachments)
     last_exc: Exception | None = None
     for candidate in _model_fallbacks(model):
@@ -1209,14 +1458,14 @@ def gemini_reply(
                     temperature=temperature,
                 ),
             )
-            return response.text or ""
+            return response.text or "", candidate
         except Exception as exc:  # noqa: BLE001 - try the next model if possible
             last_exc = exc
             if _status_of(exc) not in _FALLBACK_STATUSES:
                 raise
     if last_exc is not None:
         raise last_exc
-    return ""
+    return "", model
 
 
 def gemini_stream_reply(
@@ -1225,6 +1474,7 @@ def gemini_stream_reply(
     attachments: List[Attachment],
     system: str,
     temperature: float,
+    on_model_used: Callable[[str], None] | None = None,
 ):
     contents = build_contents(history, attachments)
     last_exc: Exception | None = None
@@ -1244,6 +1494,8 @@ def gemini_stream_reply(
                 if text_value:
                     emitted = True
                     yield text_value
+            if on_model_used is not None:
+                on_model_used(candidate)
             return
         except Exception as exc:  # noqa: BLE001 - try the next model if possible
             if emitted or _status_of(exc) not in _FALLBACK_STATUSES:
@@ -1285,11 +1537,12 @@ def chat(req: ChatRequest, user: User = Depends(require_user)) -> dict:
         system = settings.get("system_instruction", SYSTEM_INSTRUCTION)
         provider = provider_for(model)
 
+        used_model = None
         try:
             if not provider_ready(provider):
                 reply = missing_key_message(provider)
             else:
-                reply = gemini_reply(
+                reply, used_model = gemini_reply(
                     model,
                     load_history(db, req.session_id),
                     req.attachments,
@@ -1299,6 +1552,9 @@ def chat(req: ChatRequest, user: User = Depends(require_user)) -> dict:
         except Exception as exc:  # noqa: BLE001 - show a friendly provider error
             reply = friendly_ai_error(exc, model)
 
+        if used_model is not None:
+            db.add(ModelUsage(user_id=user.id, model=used_model))
+            db.commit()
         append_message(db, req.session_id, "model", reply)
         return {"reply": reply}
 
@@ -1385,16 +1641,21 @@ def chat_stream(
                 return
 
             full = ""
+            used_models: list[str] = []
             for text_value in gemini_stream_reply(
                 model,
                 history,
                 live_attachments,
                 system,
                 float(settings.get("temperature", 0.7)),
+                on_model_used=used_models.append,
             ):
                 full += text_value
                 yield sse({"delta": text_value})
             append_message(db, req.session_id, "model", full)
+            if used_models:
+                db.add(ModelUsage(user_id=user_id, model=used_models[-1]))
+                db.commit()
         except HTTPException as exc:
             db.rollback()
             yield sse({"error": exc.detail})

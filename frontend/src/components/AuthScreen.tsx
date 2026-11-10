@@ -4,6 +4,7 @@ import {
   apiUrl,
   cancelPendingLogin,
   getPendingLogin,
+  adminLogin,
   login,
   resendLoginCode,
   signup,
@@ -14,6 +15,7 @@ import { CloseIcon } from './Icons'
 interface AuthScreenProps {
   providers: Providers
   onAuthed: (user: AuthUser) => void
+  adminOnly?: boolean
 }
 
 const AUTH_ERRORS: Record<string, string> = {
@@ -23,6 +25,13 @@ const AUTH_ERRORS: Record<string, string> = {
     "We couldn't read an email from that account, so no code could be sent. Try another sign-in method.",
   access_denied: 'Sign-in was cancelled.',
   invalid_state: 'That sign-in link expired. Please try again.',
+  admin_unavailable:
+    'Admin sign-in is not configured. Set MURI_ADMIN_EMAIL and configure Google OAuth.',
+  admin_account_required:
+    'That Google account is not the configured Muri administrator account.',
+  admin_google_only: 'The admin account must sign in with Google.',
+  admin_email_unverified:
+    'Google did not verify the configured admin email address. Verify it in Google and try again.',
   rate_limited: 'Too many attempts. Please wait a moment and try again.',
   login_failed:
     'OAuth sign-in failed. Try again, or use your email and password.',
@@ -40,11 +49,58 @@ function readError(err: unknown): string {
   return 'Something went wrong.'
 }
 
-function startProvider(provider: 'google' | 'facebook') {
-  window.location.assign(apiUrl(`/api/auth/oauth/${provider}/start`))
+function startProvider(provider: 'google' | 'facebook', mode: 'user' | 'admin') {
+  const query = mode === 'admin' ? '?mode=admin' : ''
+  window.location.assign(apiUrl(`/api/auth/oauth/${provider}/start${query}`))
 }
 
-export default function AuthScreen({ providers, onAuthed }: AuthScreenProps) {
+function PrivacyNotice({
+  checked,
+  onChange,
+}: {
+  checked: boolean
+  onChange: (checked: boolean) => void
+}) {
+  return (
+    <div className="auth-privacy">
+      <details>
+        <summary>Privacy &amp; security</summary>
+        <div className="auth-privacy-copy">
+          <p>
+            Muri uses your email and sign-in details to provide account access.
+            Account passwords are stored as salted hashes, not readable text.
+          </p>
+          <p>
+            Your chats, notes, settings, and learning progress are stored in the
+            database configured for this Muri deployment. Sign-in sessions use
+            HttpOnly cookies; cookies are Secure on Vercel and HTTPS deployments.
+          </p>
+          <p>
+            Chat prompts and attached files are sent to Google Gemini to generate
+            replies. Google or Facebook sign-in is handled by that provider.
+            Avoid entering passwords or other sensitive information in chats, and
+            sign out on shared devices. Signing out does not delete saved data.
+          </p>
+        </div>
+      </details>
+      <label className="auth-privacy-check">
+        <input
+          type="checkbox"
+          required
+          checked={checked}
+          onChange={(event) => onChange(event.target.checked)}
+        />
+        <span>I have read and agree to the Privacy &amp; security notice.</span>
+      </label>
+    </div>
+  )
+}
+
+export default function AuthScreen({
+  providers,
+  onAuthed,
+  adminOnly = false,
+}: AuthScreenProps) {
   const [mode, setMode] = useState<'login' | 'signup'>('login')
   const [step, setStep] = useState<'account' | 'code'>('account')
   const [pending, setPending] = useState<PendingLogin | null>(null)
@@ -55,6 +111,7 @@ export default function AuthScreen({ providers, onAuthed }: AuthScreenProps) {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
+  const [privacyAccepted, setPrivacyAccepted] = useState(false)
 
   const params = new URLSearchParams(window.location.search)
   const authError = params.get('auth_error')
@@ -79,11 +136,12 @@ export default function AuthScreen({ providers, onAuthed }: AuthScreenProps) {
     setError('')
     setBusy(true)
     try {
-      const user =
-        mode === 'login'
+      const user = adminOnly
+        ? await adminLogin(email, password)
+        : mode === 'login'
           ? await login(email, password)
           : await signup(email, password, name)
-      onAuthed(user)
+        onAuthed(user)
     } catch (err) {
       setError(readError(err))
     } finally {
@@ -219,12 +277,18 @@ export default function AuthScreen({ providers, onAuthed }: AuthScreenProps) {
           <img className="logo-mark" src="/muri-logo.jpg" alt="" />
         </span>
         <h1 className="auth-title">
-          {mode === 'login' ? 'Welcome back' : 'Create your account'}
+          {adminOnly
+            ? 'Murillon admin access'
+            : mode === 'login'
+              ? 'Welcome back'
+              : 'Create your account'}
         </h1>
         <p className="auth-subtitle">
-          {mode === 'login'
-            ? 'Sign in to continue to Muri.'
-            : 'Get started with Muri.'}
+          {adminOnly
+            ? 'Sign in with the administrator email and password configured on the server.'
+            : mode === 'login'
+              ? 'Sign in to continue to Muri.'
+              : 'Get started with Muri.'}
         </p>
 
         {authError && (
@@ -241,7 +305,7 @@ export default function AuthScreen({ providers, onAuthed }: AuthScreenProps) {
         )}
 
         <form className="auth-form" onSubmit={(event) => void submit(event)}>
-          {mode === 'signup' && (
+          {!adminOnly && mode === 'signup' && (
             <input
               className="field"
               type="text"
@@ -254,10 +318,10 @@ export default function AuthScreen({ providers, onAuthed }: AuthScreenProps) {
           <input
             className="field"
             type="email"
-            placeholder="Email"
+            placeholder={adminOnly ? 'Admin email' : 'Email'}
             required
             value={email}
-            autoComplete="email"
+            autoComplete="username"
             onChange={(event) => setEmail(event.target.value)}
           />
           <input
@@ -265,25 +329,48 @@ export default function AuthScreen({ providers, onAuthed }: AuthScreenProps) {
             type="password"
             placeholder="Password"
             required
-            minLength={8}
+            minLength={adminOnly ? 1 : 8}
             value={password}
-            autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+            autoComplete={
+              adminOnly || mode === 'login'
+                ? 'current-password'
+                : 'new-password'
+            }
             onChange={(event) => setPassword(event.target.value)}
           />
-          <button type="submit" className="primary-btn auth-submit" disabled={busy}>
-            {busy ? 'Please wait…' : mode === 'login' ? 'Sign in' : 'Create account'}
+          {!adminOnly && (
+            <PrivacyNotice
+              checked={privacyAccepted}
+              onChange={setPrivacyAccepted}
+            />
+          )}
+          <button
+            type="submit"
+            className="primary-btn auth-submit"
+            disabled={busy || (!adminOnly && !privacyAccepted)}
+          >
+            {busy
+              ? 'Please wait…'
+              : adminOnly
+                ? 'Sign in as administrator'
+                : mode === 'login'
+                  ? 'Sign in'
+                  : 'Create account'}
           </button>
         </form>
 
-        <div className="auth-divider">
-          <span>or continue with</span>
-        </div>
+        {(!adminOnly || (providers.google && providers.admin)) && (
+          <div className="auth-divider">
+            <span>{adminOnly ? 'or continue with Google' : 'or continue with'}</span>
+          </div>
+        )}
         <div className="auth-providers">
-          {providers.google && (
+          {providers.google && (!adminOnly || providers.admin) && (
             <button
               type="button"
               className="provider-btn google"
-              onClick={() => startProvider('google')}
+              disabled={!adminOnly && !privacyAccepted}
+              onClick={() => startProvider('google', adminOnly ? 'admin' : 'user')}
             >
               <svg viewBox="0 0 48 48" width="18" height="18" aria-hidden="true">
                 <path
@@ -303,14 +390,17 @@ export default function AuthScreen({ providers, onAuthed }: AuthScreenProps) {
                   d="M43.6 20.1H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C36.9 39.2 44 34 44 24c0-1.3-.1-2.6-.4-3.9z"
                 />
               </svg>
-              Continue with Google
+              {adminOnly
+                ? 'Continue as Murillon with Google'
+                : 'Continue with Google'}
             </button>
           )}
-          {providers.facebook && (
+          {!adminOnly && providers.facebook && (
             <button
               type="button"
               className="provider-btn facebook"
-              onClick={() => startProvider('facebook')}
+              disabled={!privacyAccepted}
+              onClick={() => startProvider('facebook', 'user')}
             >
               <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
                 <path
@@ -321,7 +411,7 @@ export default function AuthScreen({ providers, onAuthed }: AuthScreenProps) {
               Continue with Facebook
             </button>
           )}
-          {!providers.google && !providers.facebook && (
+          {!adminOnly && !providers.google && !providers.facebook && (
             <p className="auth-subtitle">
               Social sign-in is not configured yet. Use your email and
               password, or ask the admin to connect Google/Facebook.
@@ -329,15 +419,17 @@ export default function AuthScreen({ providers, onAuthed }: AuthScreenProps) {
           )}
         </div>
 
-        <button
-          type="button"
-          className="auth-switch"
-          onClick={() => setMode(mode === 'login' ? 'signup' : 'login')}
-        >
-          {mode === 'login'
-            ? "Don't have an account? Create one"
-            : 'Already have an account? Sign in'}
-        </button>
+        {!adminOnly && (
+          <button
+            type="button"
+            className="auth-switch"
+            onClick={() => setMode(mode === 'login' ? 'signup' : 'login')}
+          >
+            {mode === 'login'
+              ? "Don't have an account? Create one"
+              : 'Already have an account? Sign in'}
+          </button>
+        )}
       </div>
     </div>
   )

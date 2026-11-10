@@ -17,6 +17,11 @@ frontend/.env.android
 # Tests never ship to production
 tests/
 
+# Local secrets must never ship: the Vercel CLI does NOT apply .gitignore,
+# so without this line a `vercel` CLI deploy would upload muri/backend/.env
+# (its localhost DATABASE_URL would then shadow your dashboard settings).
+**/.env
+
 # Repo extras not needed at runtime
 .vscode/
 MURI INTRO.mp4

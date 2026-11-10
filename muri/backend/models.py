@@ -30,6 +30,9 @@ class User(Base):
     avatar_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     provider: Mapped[str] = mapped_column(String(32), nullable=False, default="local")
     provider_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    role: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="user", server_default="user"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )
@@ -82,6 +85,19 @@ class Message(Base):
     )
 
     session: Mapped[ChatSession] = relationship(back_populates="messages")
+
+
+class ModelUsage(Base):
+    __tablename__ = "model_usage"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    model: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
 
 
 class UserSetting(Base):

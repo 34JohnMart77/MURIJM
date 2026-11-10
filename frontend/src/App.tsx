@@ -6,6 +6,7 @@ import Dashboard from './components/Dashboard'
 import HistoryView from './components/HistoryView'
 import SettingsView from './components/SettingsView'
 import AuthScreen from './components/AuthScreen'
+import AdminDashboard from './components/AdminDashboard'
 import LearnView from './components/LearnView'
 import GamesView from './components/GamesView'
 import NotesView from './components/NotesView'
@@ -48,6 +49,7 @@ import {
 
 const SESSION_KEY = 'muri.sessionId'
 const THEME_KEY = 'muri.theme'
+const ADMIN_LOGIN_PATH = '/admin/login'
 
 function readTheme(): Theme {
   const saved = localStorage.getItem(THEME_KEY)
@@ -70,6 +72,7 @@ function newId(): string {
 }
 
 function App() {
+  const adminLogin = window.location.pathname.replace(/\/+$/, '') === ADMIN_LOGIN_PATH
   const [view, setView] = useState<View>('chat')
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [currentId, setCurrentId] = useState<string | null>(null)
@@ -87,6 +90,7 @@ function App() {
   const [providers, setProviders] = useState<Providers>({
     google: false,
     facebook: false,
+    admin: false,
   })
   const [profile, setProfile] = useState<LearnProfile | null>(null)
   const [loadingProfile, setLoadingProfile] = useState(true)
@@ -178,7 +182,7 @@ function App() {
   }, [earned])
 
   useEffect(() => {
-    if (!user) return
+    if (!user || user.role !== 'user') return
     let active = true
     async function init() {
       try {
@@ -224,7 +228,7 @@ function App() {
   }, [user, refreshStats])
 
   useEffect(() => {
-    if (!user) {
+    if (!user || user.role !== 'user') {
       setProfile(null)
       setLoadingProfile(false)
       return
@@ -425,21 +429,23 @@ function App() {
 
   const clearAll = useCallback(async () => {
     if (!window.confirm('Delete ALL conversations? This cannot be undone.'))
-      return
-    try {
-      await clearAllSessions()
-    } catch {
-      // ignore
-    }
+      return false
+    await clearAllSessions()
+    const id = newId()
+    localStorage.setItem(SESSION_KEY, id)
     setSessions([])
-    await startNewChat()
+    setCurrentId(id)
+    setMessages([])
+    setView('chat')
+    setSidebarOpen(false)
     void refreshStats()
-  }, [refreshStats, startNewChat])
+    return true
+  }, [refreshStats])
 
   const handleAuthed = useCallback(
     (me: AuthUser) => {
       setUser(me)
-      void refreshStats()
+      if (me.role === 'user') void refreshStats()
     },
     [refreshStats],
   )
@@ -509,8 +515,18 @@ function App() {
     )
   }
 
-  if (!user) {
-    return <AuthScreen providers={providers} onAuthed={handleAuthed} />
+  if (!user || (adminLogin && user.role !== 'admin')) {
+    return (
+      <AuthScreen
+        providers={providers}
+        onAuthed={handleAuthed}
+        adminOnly={adminLogin}
+      />
+    )
+  }
+
+  if (user.role === 'admin') {
+    return <AdminDashboard user={user} onLogout={() => void handleLogout()} />
   }
 
   const showOnboarding =
@@ -627,10 +643,11 @@ function App() {
           key={settings ? 'ready' : 'loading'}
           settings={settings}
           theme={theme}
+          chatBusy={busy}
           models={models}
           onSave={saveSettings}
           onThemeChange={setTheme}
-          onClearAll={() => void clearAll()}
+          onClearAll={clearAll}
         />
       )}
     </>

@@ -89,6 +89,7 @@ export default function ChatView({
   const [input, setInput] = useState('')
   const [pending, setPending] = useState<PendingAttachment[]>([])
   const [error, setError] = useState('')
+  const [processingAttachments, setProcessingAttachments] = useState(false)
   const [copied, setCopied] = useState<number | null>(null)
   const [saved, setSaved] = useState<number | null>(null)
   const [recording, setRecording] = useState(false)
@@ -139,20 +140,27 @@ export default function ChatView({
     const file = new File([blob], `voice-message.${audioExtension(mimeType)}`, {
       type: mimeType,
     })
-    const url = await readAsDataUrl(file)
-    const stamp = new Date().toISOString().slice(11, 19).replace(/:/g, '')
-    setPending((prev) => [
-      ...prev,
-      {
-        id: `voice-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        name: `voice-message-${stamp}.${audioExtension(mimeType)}`,
-        mime_type: mimeType,
-        data: url,
-        url,
-        kind: 'audio',
-        size: blob.size,
-      },
-    ])
+    setProcessingAttachments(true)
+    try {
+      const url = await readAsDataUrl(file)
+      const stamp = new Date().toISOString().slice(11, 19).replace(/:/g, '')
+      setPending((prev) => [
+        ...prev,
+        {
+          id: `voice-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          name: `voice-message-${stamp}.${audioExtension(mimeType)}`,
+          mime_type: mimeType,
+          data: url,
+          url,
+          kind: 'audio',
+          size: blob.size,
+        },
+      ])
+    } catch {
+      setError('Could not prepare the voice message. Please try again.')
+    } finally {
+      setProcessingAttachments(false)
+    }
   }
 
   async function startRecording() {
@@ -162,18 +170,22 @@ export default function ChatView({
       return
     }
     setError('')
+    let stream: MediaStream | null = null
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const acquiredStream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+      })
+      stream = acquiredStream
       const mimeType = pickAudioMimeType()
       const recorder = mimeType
-        ? new MediaRecorder(stream, { mimeType })
-        : new MediaRecorder(stream)
+        ? new MediaRecorder(acquiredStream, { mimeType })
+        : new MediaRecorder(acquiredStream)
       chunksRef.current = []
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) chunksRef.current.push(event.data)
       }
       recorder.onstop = () => {
-        stream.getTracks().forEach((track) => track.stop())
+        acquiredStream.getTracks().forEach((track) => track.stop())
         if (timerRef.current !== null) {
           window.clearInterval(timerRef.current)
           timerRef.current = null
@@ -192,7 +204,7 @@ export default function ChatView({
         if (blob.size > 0) void addAudioBlob(blob, type)
       }
       recorderRef.current = recorder
-      streamRef.current = stream
+      streamRef.current = acquiredStream
       cancelledRef.current = false
       recorder.start()
       setRecording(true)
@@ -204,6 +216,9 @@ export default function ChatView({
         })
       }, 1000)
     } catch {
+      stream?.getTracks().forEach((track) => track.stop())
+      streamRef.current = null
+      recorderRef.current = null
       setError('Could not access your microphone. Check browser permissions.')
     }
   }
@@ -220,32 +235,40 @@ export default function ChatView({
 
   async function addFiles(files: FileList | null) {
     if (!files || files.length === 0) return
+    setProcessingAttachments(true)
     const next: PendingAttachment[] = []
     let message = ''
-    for (const file of Array.from(files)) {
-      if (pending.length + next.length >= MAX_ATTACHMENTS) {
-        message = `Up to ${MAX_ATTACHMENTS} attachments.`
-        break
+    setError('')
+    try {
+      for (const file of Array.from(files)) {
+        if (pending.length + next.length >= MAX_ATTACHMENTS) {
+          message = `Up to ${MAX_ATTACHMENTS} attachments.`
+          break
+        }
+        if (file.size > MAX_BYTES) {
+          message = `"${file.name}" is larger than 8 MB.`
+          continue
+        }
+        const url = await readAsDataUrl(file)
+        next.push({
+          id: `${file.name}-${file.size}-${Math.random().toString(36).slice(2)}`,
+          name: file.name,
+          mime_type: file.type || 'application/octet-stream',
+          data: url,
+          url,
+          kind: file.type.startsWith('image/') ? 'image' : 'file',
+          size: file.size,
+        })
       }
-      if (file.size > MAX_BYTES) {
-        message = `"${file.name}" is larger than 8 MB.`
-        continue
-      }
-      const url = await readAsDataUrl(file)
-      next.push({
-        id: `${file.name}-${file.size}-${Math.random().toString(36).slice(2)}`,
-        name: file.name,
-        mime_type: file.type || 'application/octet-stream',
-        data: url,
-        url,
-        kind: file.type.startsWith('image/') ? 'image' : 'file',
-        size: file.size,
-      })
+      if (next.length) setPending((prev) => [...prev, ...next])
+      setError(message)
+    } catch {
+      setError('Could not prepare one or more files. Please try again.')
+    } finally {
+      setProcessingAttachments(false)
+      if (fileRef.current) fileRef.current.value = ''
+      if (cameraRef.current) cameraRef.current.value = ''
     }
-    if (next.length) setPending((prev) => [...prev, ...next])
-    setError(message)
-    if (fileRef.current) fileRef.current.value = ''
-    if (cameraRef.current) cameraRef.current.value = ''
   }
 
   function removePending(id: string) {
@@ -254,7 +277,7 @@ export default function ChatView({
 
   function submit() {
     const text = input.trim()
-    if (busy || (!text && pending.length === 0)) return
+    if (busy || processingAttachments || (!text && pending.length === 0)) return
     const outgoing: OutgoingAttachment[] = pending.map((item) => ({
       name: item.name,
       mime_type: item.mime_type,
@@ -426,6 +449,10 @@ export default function ChatView({
           submit()
         }}
       >
+        <p className="chat-privacy-note">
+          Prompts and attachments are sent to Google Gemini. Avoid sharing
+          sensitive information.
+        </p>
         {pending.length > 0 && (
           <div className="attach-strip">
             {pending.map((item) => (
@@ -456,6 +483,11 @@ export default function ChatView({
         )}
 
         {error && <p className="attach-error">{error}</p>}
+        {processingAttachments && (
+          <p className="attachment-status" role="status">
+            Preparing attachments…
+          </p>
+        )}
 
         {recording && (
           <div className="recording-bar" role="status">
@@ -502,7 +534,7 @@ export default function ChatView({
             className="icon-btn attach-btn"
             title="Attach files"
             aria-label="Attach files"
-            disabled={recording}
+            disabled={busy || recording || processingAttachments}
             onClick={() => fileRef.current?.click()}
           >
             <AttachIcon />
@@ -512,7 +544,7 @@ export default function ChatView({
             className="icon-btn attach-btn"
             title="Take a photo"
             aria-label="Take a photo"
-            disabled={recording}
+            disabled={busy || recording || processingAttachments}
             onClick={() => cameraRef.current?.click()}
           >
             <CameraIcon />
@@ -525,7 +557,7 @@ export default function ChatView({
             title={recording ? 'Stop recording' : 'Record a voice message'}
             aria-label={recording ? 'Stop recording' : 'Record a voice message'}
             aria-pressed={recording}
-            disabled={busy}
+            disabled={busy || processingAttachments}
             onClick={() => (recording ? stopRecording() : void startRecording())}
           >
             <MicIcon />
@@ -560,7 +592,10 @@ export default function ChatView({
             <button
               type="submit"
               className="send-btn"
-              disabled={input.trim() === '' && pending.length === 0}
+              disabled={
+                processingAttachments ||
+                (input.trim() === '' && pending.length === 0)
+              }
             >
               Send
             </button>

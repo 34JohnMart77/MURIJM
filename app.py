@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import sys
+from importlib import import_module
 
 _BACKEND_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "muri", "backend"
@@ -22,6 +23,6 @@ _BACKEND_DIR = os.path.join(
 if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
 
-from main import app  # noqa: E402,F401  (re-exported for Vercel)
+app = import_module("main").app  # noqa: E402  (re-exported for Vercel)
 
 __all__ = ["app"]

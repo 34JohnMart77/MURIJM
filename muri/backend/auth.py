@@ -26,6 +26,7 @@ from models import PendingLogin, User, UserSetting
 
 COOKIE_NAME = "muri_session"
 OAUTH_STATE_COOKIE = "muri_oauth_state"
+OAUTH_MODE_COOKIE = "muri_oauth_mode"
 PENDING_LOGIN_COOKIE = "muri_pending_login"
 SESSION_TTL = 60 * 60 * 24 * 30  # 30 days
 
@@ -44,8 +45,20 @@ if not os.getenv("MURI_SECRET_KEY", "").strip():
         "Sessions will be invalidated on restart. Set it in muri/backend/.env."
     )
 
-BASE_URL = os.getenv("MURI_BASE_URL", "http://localhost:8000").rstrip("/")
-COOKIE_SECURE = os.getenv("MURI_COOKIE_SECURE", "false").lower() in {"1", "true", "yes"}
+BASE_URL = (
+    os.getenv("MURI_BASE_URL", "").strip()
+    or os.getenv("RENDER_EXTERNAL_URL", "").strip()
+    or "http://localhost:8000"
+).rstrip("/")
+_COOKIE_SECURE_CONFIG = os.getenv("MURI_COOKIE_SECURE", "").strip().lower()
+_DEPLOYED_HTTPS = (
+    BASE_URL.startswith("https://")
+    or os.getenv("VERCEL", "").strip().lower() not in {"", "0", "false"}
+)
+COOKIE_SECURE = (
+    _COOKIE_SECURE_CONFIG in {"1", "true", "yes"}
+    or _DEPLOYED_HTTPS
+)
 # Cross-site cookies (required for the Android app talking to a hosted backend)
 # must be SameSite=None, which in turn requires Secure.
 COOKIE_SAMESITE = os.getenv("MURI_COOKIE_SAMESITE", "lax").strip().lower()
@@ -58,6 +71,8 @@ GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "").strip()
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
 FACEBOOK_APP_ID = os.getenv("FACEBOOK_APP_ID", "").strip()
 FACEBOOK_APP_SECRET = os.getenv("FACEBOOK_APP_SECRET", "").strip()
+ADMIN_EMAIL = os.getenv("MURI_ADMIN_EMAIL", "").strip().lower()
+ADMIN_PASSWORD = os.getenv("MURI_ADMIN_PASSWORD", "")
 
 # SMTP used to deliver the one-time security code by email.
 SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
@@ -158,17 +173,69 @@ def decode_session_token(token: str) -> Optional[dict]:
 # Users
 # --------------------------------------------------------------------------- #
 def user_public(user: User) -> dict:
+    is_admin = is_admin_account(user)
     return {
         "id": user.id,
         "email": user.email,
-        "name": user.name,
+        "name": "Murillon" if is_admin else user.name,
         "avatar_url": user.avatar_url,
         "provider": user.provider,
+        "role": "admin" if is_admin else "user",
     }
 
 
 def normalize_email(email: str) -> str:
     return email.strip().lower()
+
+
+def is_admin_account(user: User) -> bool:
+    return bool(
+        ADMIN_EMAIL
+        and user.role == "admin"
+        and user.provider in {"google", "admin"}
+        and normalize_email(user.email or "") == ADMIN_EMAIL
+    )
+
+
+def login_admin(email: str, password: str) -> User:
+    if not ADMIN_EMAIL or len(ADMIN_PASSWORD) < 16:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Admin login is not configured. Set MURI_ADMIN_EMAIL and a "
+                "MURI_ADMIN_PASSWORD of at least 16 characters."
+            ),
+        )
+
+    email_matches = hmac.compare_digest(
+        normalize_email(email).encode("utf-8"), ADMIN_EMAIL.encode("utf-8")
+    )
+    password_matches = hmac.compare_digest(
+        password.encode("utf-8"), ADMIN_PASSWORD.encode("utf-8")
+    )
+    if not (email_matches and password_matches):
+        raise HTTPException(status_code=401, detail="Invalid admin email or password.")
+
+    with SessionLocal() as db:
+        user = db.scalar(select(User).where(User.email == ADMIN_EMAIL))
+        if user is None:
+            user = User(
+                id=str(uuid.uuid4()),
+                email=ADMIN_EMAIL,
+                name="Murillon",
+                provider="admin",
+                role="admin",
+            )
+            db.add(user)
+        else:
+            user.role = "admin"
+            user.name = "Murillon"
+            if user.provider != "google":
+                user.provider = "admin"
+        db.commit()
+        db.refresh(user)
+        db.expunge(user)
+        return user
 
 
 def validate_credentials(email: str, password: str) -> None:
@@ -225,6 +292,20 @@ def find_or_create_oauth_user(
     name: Optional[str],
     avatar_url: Optional[str],
 ) -> User:
+    if (
+        provider != "google"
+        and ADMIN_EMAIL
+        and normalize_email(email or "") == ADMIN_EMAIL
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="The configured administrator must use the admin sign-in page.",
+        )
+    is_configured_admin = bool(
+        provider == "google"
+        and ADMIN_EMAIL
+        and normalize_email(email or "") == ADMIN_EMAIL
+    )
     with SessionLocal() as db:
         user = db.scalar(
             select(User).where(
@@ -245,12 +326,18 @@ def find_or_create_oauth_user(
             user = User(
                 id=str(uuid.uuid4()),
                 email=normalize_email(email) if email else None,
-                name=name,
+                name="Murillon" if is_configured_admin else name,
                 avatar_url=avatar_url,
                 provider=provider,
                 provider_id=provider_id,
+                role="admin" if is_configured_admin else "user",
             )
             db.add(user)
+        else:
+            user.role = "admin" if is_configured_admin else "user"
+            if is_configured_admin:
+                user.email = ADMIN_EMAIL
+                user.name = "Murillon"
         db.commit()
         db.refresh(user)
         db.expunge(user)
@@ -282,6 +369,13 @@ def require_user(request: Request) -> User:
     user = current_user(request)
     if user is None:
         raise HTTPException(status_code=401, detail="Not authenticated")
+    return user
+
+
+def require_admin(request: Request) -> User:
+    user = require_user(request)
+    if not is_admin_account(user):
+        raise HTTPException(status_code=403, detail="Admin access required.")
     return user
 
 
@@ -349,6 +443,7 @@ class OAuthProfile:
     email: Optional[str]
     name: Optional[str]
     avatar_url: Optional[str]
+    email_verified: bool = False
 
 
 def providers_enabled() -> dict:
@@ -424,6 +519,7 @@ def exchange_google(code: str) -> OAuthProfile:
         email=data.get("email"),
         name=data.get("name"),
         avatar_url=data.get("picture"),
+        email_verified=data.get("email_verified") is True,
     )
 
 
