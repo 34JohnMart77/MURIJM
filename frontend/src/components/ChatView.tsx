@@ -449,10 +449,6 @@ export default function ChatView({
           submit()
         }}
       >
-        <p className="chat-privacy-note">
-          Prompts and attachments are sent to Google Gemini. Avoid sharing
-          sensitive information.
-        </p>
         {pending.length > 0 && (
           <div className="attach-strip">
             {pending.map((item) => (

@@ -317,10 +317,11 @@ def provider_ready(provider: str) -> bool:
 
 
 def _env_location() -> str:
-    """Where configuration lives: the .env file locally, Vercel's dashboard
-    when deployed (the .env file is git-ignored and never reaches Vercel)."""
+    """Where configuration lives locally or on supported hosting providers."""
     if os.getenv("VERCEL", "").strip():
         return "the Vercel project's Environment Variables"
+    if os.getenv("RENDER_EXTERNAL_URL", "").strip():
+        return "the Render service's Environment tab"
     return "muri/backend/.env"
 
 
@@ -1438,8 +1439,27 @@ def friendly_ai_error(exc: Exception, model: str) -> str:
     """Turn a provider exception into something a learner can act on."""
     text = str(exc)
     lowered = text.lower()
-    if "invalid api key" in lowered or "authentication" in lowered:
-        return "The AI provider rejected its API key. Check the key in .env."
+    if (
+        "invalid api key" in lowered
+        or "api_key_invalid" in lowered
+        or "authentication" in lowered
+    ):
+        return (
+            "The AI provider rejected its API key. Check the key in "
+            f"{_env_location()} and redeploy."
+        )
+    if (
+        _status_of(exc) == 403
+        or "permission_denied" in lowered
+        or "access_denied" in lowered
+    ):
+        return (
+            "Google denied access to the Gemini API (403). Check that "
+            f"GEMINI_API_KEY in {_env_location()} is a valid Google AI Studio "
+            "key and that its Google Cloud project and key restrictions allow "
+            "the Generative Language API. Update the key and restart or "
+            "redeploy."
+        )
     if status := _status_of(exc):
         if status == 404 or "not_found" in lowered or "not found" in lowered:
             return (

@@ -708,7 +708,6 @@
   color: var(--danger);
 }
 
-.chat-privacy-note,
 .attachment-status {
   align-self: center;
   max-width: 860px;

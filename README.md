@@ -32,8 +32,13 @@ its project environment variables.
 
 ## Deploy
 
-- Render/Docker: `render.yaml` + `Dockerfile` (set `GEMINI_API_KEY`; configure
-  optional social sign-in credentials in the service's Environment tab).
+- Render/Docker: `render.yaml` + `Dockerfile`. In the Render service's
+  **Environment** tab, set `GEMINI_API_KEY` to a valid key from Google AI
+  Studio; configure optional social sign-in credentials there too. If chat
+  returns a 403, check that the key's Google Cloud project has access to the
+  Generative Language API and that the key's API restrictions allow it, then
+  save and redeploy. `/api/health` reports whether a key is present, not whether
+  Google has granted it access.
 - Vercel (Services: FastAPI + Vite, one domain):
   1. `vercel.json` already declares both services (`app`, `frontend`)
      with `/api/*` routed to the backend. Import the repo from its root
