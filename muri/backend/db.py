@@ -19,7 +19,7 @@ load_dotenv(dotenv_path=Path(__file__).with_name(".env"), override=False)
 # localhost, where serverless has no MySQL -- that case is detected below and
 # logged as an actionable error instead of timing out on every cold start.
 # --------------------------------------------------------------------------- #
-DEFAULT_DATABASE_URL = "mysql+pymysql://root@127.0.0.1:3306/muri?charset=utf8mb4"
+DEFAULT_DATABASE_URL = "mysql+pymysql://root@127.0.0.1:3306/railway"
 
 # Vercel exports VERCEL=1 for both build and function runtime.
 ON_VERCEL = os.getenv("VERCEL", "").strip().lower() not in {"", "0", "false"}
@@ -80,7 +80,8 @@ def _encode_userinfo_at(url: str) -> str:
     return candidate
 
 
-DATABASE_URL = _normalize_database_url(os.getenv("DATABASE_URL"))
+_RAW_DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+DATABASE_URL = _normalize_database_url(_RAW_DATABASE_URL)
 
 if not DATABASE_URL:
     raise RuntimeError("[Muri] DATABASE_URL is not set. Set it in muri/backend/.env"
@@ -144,6 +145,10 @@ def _connect_args(url: str) -> dict:
     args: dict = {"connect_timeout": _connect_timeout()}
     if _SSL_CA:
         args["ssl_ca"] = _SSL_CA
+    elif not _is_loopback(url):
+        # Hosted databases: require TLS even when no custom CA is supplied.
+        # PyMySQL will use the platform CA store when ssl=True.
+        args["ssl"] = True
     return args
 
 
@@ -169,7 +174,7 @@ def _describe_target(url: str) -> str:
 
 _SOURCE = (
     "DATABASE_URL environment variable"
-    if os.getenv("DATABASE_URL", "").strip()
+    if _RAW_DATABASE_URL
     else "built-in localhost fallback (DATABASE_URL is NOT set)"
 )
 print(f"[Muri] Database target: {_describe_target(DATABASE_URL)} [{_SOURCE}]")
