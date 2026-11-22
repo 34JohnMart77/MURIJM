@@ -11,7 +11,7 @@ services:
       # SQLite file inside the container (simplest; data resets on redeploy).
       # No external database or credit card needed.
       - key: DATABASE_URL
-        value: sqlite:///./muri.db
+        value: mysql+mysqlconnector:///./muri.db
       - key: GEMINI_API_KEY
         sync: false # <-- the only value you need to paste in
       - key: MURI_SECRET_KEY
