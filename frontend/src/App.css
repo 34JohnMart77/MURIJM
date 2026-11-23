@@ -2268,6 +2268,105 @@ input[type='range'] {
 }
 
 /* ---------- games ---------- */
+.game-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.game-tabs button {
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-soft);
+  color: var(--text-h);
+  cursor: pointer;
+}
+
+.game-tabs button.active,
+.game-tabs button:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.game-panel {
+  align-items: center;
+}
+
+.game-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+}
+
+.game-panel-head h3 { margin: 0; }
+.game-panel-head p { margin: 4px 0 0; }
+.game-status { min-height: 22px; margin: 0; text-align: center; color: var(--text); }
+
+.snake-board {
+  display: grid;
+  width: min(420px, 100%);
+  aspect-ratio: 1;
+  padding: 5px;
+  gap: 3px;
+  border-radius: 14px;
+  background: #15202b;
+}
+
+.snake-cell { border-radius: 4px; background: #22303c; }
+.snake-body { background: #5eead4; }
+.snake-head { background: #2dd4bf; box-shadow: 0 0 8px rgba(45, 212, 191, 0.7); }
+.snake-food { background: #fb7185; border-radius: 50%; box-shadow: 0 0 8px rgba(251, 113, 133, 0.7); }
+
+.word-grid {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(30px, 1fr));
+  width: min(480px, 100%);
+  gap: 5px;
+}
+
+.word-cell {
+  aspect-ratio: 1;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text-h);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.word-cell:hover,
+.word-cell.selected { border-color: var(--accent); background: var(--accent-bg); color: var(--accent); }
+
+.word-bank { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.word-bank span { padding: 6px 10px; border-radius: 999px; background: var(--code-bg); color: var(--text); font-size: 13px; }
+.word-bank .word-found { color: var(--accent); text-decoration: line-through; }
+
+.color-board {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(48px, 86px));
+  gap: 10px;
+}
+
+.color-block {
+  aspect-ratio: 1;
+  border: 3px solid transparent;
+  border-radius: 14px;
+  cursor: pointer;
+  opacity: 0.72;
+  transition: transform 0.15s, opacity 0.15s, box-shadow 0.15s;
+}
+
+.color-block:hover { transform: translateY(-2px); opacity: 0.9; }
+.color-block.lit { opacity: 1; transform: scale(1.08); box-shadow: 0 0 0 4px var(--bg), 0 0 0 7px var(--accent); }
+.color-0 { background: #fb7185; }
+.color-1 { background: #60a5fa; }
+.color-2 { background: #facc15; }
+.color-3 { background: #4ade80; }
+
 .quiz-card {
   gap: 16px;
 }

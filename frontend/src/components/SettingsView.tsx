@@ -12,9 +12,7 @@ interface SettingsViewProps {
   onClearAll: () => Promise<boolean>
 }
 
-const MODEL_SUGGESTIONS = [
-  'muri-v1.',
-]
+const MODEL_DISPLAY_NAME = 'muri-v1'
 
 const THEMES: { id: Theme; label: string }[] = [
   { id: 'light', label: 'Light' },
@@ -45,7 +43,9 @@ export default function SettingsView({
   const [clearError, setClearError] = useState('')
   const [cleared, setCleared] = useState(false)
 
-  const modelOptions = models != null && models.length > 0 ? models : MODEL_SUGGESTIONS
+  // Keep the provider model id in state, but expose only Muri's friendly name.
+  // This leaves the Gemini API model selection unchanged.
+  const providerModel = settings?.model ?? models?.[0] ?? ''
 
   async function save() {
     setSaveError('')
@@ -90,26 +90,17 @@ export default function SettingsView({
       <section className="panel">
         <h3>Model</h3>
         <p className="muted">
-          Pick the Gemini model Muri replies with. Custom ids are allowed.
+          Pick the model Muri replies with.
         </p>
         <div className="model-list">
-          {modelOptions.map((name) => (
-            <button
-              key={name}
-              type="button"
-              className={model === name ? 'active' : ''}
-              onClick={() => setModel(name)}
-            >
-              {name}
-            </button>
-          ))}
+          <button
+            type="button"
+            className={model === providerModel ? 'active' : ''}
+            onClick={() => setModel(providerModel)}
+          >
+            {MODEL_DISPLAY_NAME}
+          </button>
         </div>
-        <input
-          className="field"
-          value={model}
-          onChange={(event) => setModel(event.target.value)}
-          placeholder="type a custom model id"
-        />
       </section>
 
       <section className="panel">
